@@ -31,10 +31,7 @@ class Client extends t.Client {
   void _handleIncomingMessage(TlObject msg) {
     if (msg is UpdatesBase) {
       _streamController.add(msg);
-    }
-
-    //
-    if (msg is MsgContainer) {
+    } else if (msg is MsgContainer) {
       for (final message in msg.messages) {
         _handleIncomingMessage(message);
       }
@@ -75,6 +72,15 @@ class Client extends t.Client {
       final gZippedData = GZipDecoder().decodeBytes(msg.packedData);
       final newObj = BinaryReader(Uint8List.fromList(gZippedData)).readObject();
       _handleIncomingMessage(newObj);
+    } else if (msg is BadServerSalt){
+      final ak = authKey;
+      if (ak == null) throw Exception(("This is a bug report it with log"));
+      authKey = AuthorizationKey(ak.id, ak.key, msg.newServerSalt);
+      return;
+      // ToDo: Resend Message with badMsgId
+    }else{
+      print("Type: ${msg.runtimeType}");
+      print("Warning [Unhandled Message]: $msg");
     }
   }
 
