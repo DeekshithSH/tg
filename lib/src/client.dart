@@ -5,14 +5,16 @@ class Client extends t.Client {
     required this.receiver,
     required this.sender,
     required this.obfuscation,
-    required this.session,
+    required this.authKey,
   });
 
-  Session? session;
+  AuthorizationKey? authKey;
 
   final Obfuscation obfuscation;
   final Stream<Uint8List> receiver;
   final Sink<List<int>> sender;
+
+  final sessionId = Random().nextInt(1 << 32);
 
   late final _EncryptedTransformer _trns;
 
@@ -30,14 +32,10 @@ class Client extends t.Client {
   void _handleIncomingMessage(TlObject msg) {
     if (msg is UpdatesBase) {
       _streamController.add(msg);
-    }
-
-    //
-    if (msg is MsgContainer) {
+    } else if (msg is MsgContainer) {
       for (final message in msg.messages) {
         _handleIncomingMessage(message);
       }
-
       return;
     } else if (msg is Msg) {
       _handleIncomingMessage(msg.body);
@@ -77,11 +75,11 @@ class Client extends t.Client {
     }
   }
 
-  Future<Session> connect() async {
+  Future<AuthorizationKey> connect() async {
     sender.add(obfuscation.preamble);
     await Future.delayed(Duration(milliseconds: 100));
 
-    Future<Session> createSession() async {
+    Future<AuthorizationKey> createAuthKey() async {
       final uot = _UnEncryptedTransformer(
         receiver,
         obfuscation,
@@ -92,30 +90,23 @@ class Client extends t.Client {
 
       await uot.dispose();
 
-      final random = Random();
-      final sessionId = random.nextInt(1 << 32);
-
-      final session = Session(id: sessionId, authKey: ak);
-
-      return session;
+      return ak;
     }
 
-    final s = session ??= await createSession();
+    final ak = authKey ??= await createAuthKey();
 
-    _trns = _EncryptedTransformer(receiver, s.authKey, obfuscation);
+    _trns = _EncryptedTransformer(receiver, ak, obfuscation);
 
     _trns.stream.listen((v) {
       _handleIncomingMessage(v);
     });
 
-    return s;
+    return ak;
   }
 
   @override
   Future<t.Result<t.TlObject>> invoke(t.TlMethod method) async {
-    final session = this.session ??= await connect();
-
-    final auth = session.authKey;
+    final auth = authKey ??= await connect();
 
     final preferEncryption = auth.id != 0;
 
@@ -150,7 +141,7 @@ class Client extends t.Client {
     _pending[m.id] = completer;
     final buffer = auth.id == 0
         ? _encodeNoAuth(method, m)
-        : _encodeWithAuth(method, m, 10, auth);
+        : _encodeWithAuth(method, m, sessionId, auth);
 
     obfuscation.send.encryptDecrypt(buffer, buffer.length);
     sender.add(Uint8List.fromList(buffer));
